@@ -7,89 +7,107 @@ CREATE TABLE transactions_2016 (
 COPY transactions_2016
 FROM '/Users/fangjie/Downloads/train_2016_v2.csv' DELIMITER ',' CSV HEADER;
 
+CREATE TABLE transactions_2017 (
+	parcelid bigint, 
+	logerror double precision,
+	transactiondate varchar
+);
+COPY transactions_2017
+FROM '/Users/fangjie/Downloads/train_2017.csv' DELIMITER ',' CSV HEADER;
 
-/*
-1. for each transaction (both in 2016 and 2017)
-	1. month of year
-	2. week of month
-	3. day of week  WEEK
-	
-	4. average logerror in the same day of week, but only prior to today
-	
-	
-	5. average logerror in last month, if applicable (windowing function)
-	6. standard deviation of log error in last month, if applicable
-	
-	7. average logerror in last 2 months, if applicable 
-	8. standard deviation of log error in last 2 months, if applicable
-	
-	9. average logerror in last 3 months, if applicable 
-	10. standard deviation of log error in last 3 months, if applicable
-	
-	11. average logerror in last 6 months, if applicable 
-	12. standard deviation of log error in last 6 months, if applicable
 
-Use this syntax:
-create table new_table as
+DROP TABLE IF EXISTS transactions;
+CREATE TABLE transactions AS
+SELECT * FROM transactions_2016
+UNION ALL
+SELECT * FROM transactions_2017;
 
-select 
-	* 
-from  a
-join b
-\CREATE TABLE new_table_name AS
-    SELECT column1, column2,...
-    FROM existing_table_name
-    WHERE ....;
 
-*/
-
-CREATE TABLE newtable AS
+DROP TABLE IF EXISTS tmp_additional_temporal_information;
+CREATE TABLE tmp_additional_temporal_information AS
 SELECT 
-    t.parcelid as id,
-    t.logerror as err,
-    t.transactiondate as ndate,
-    date_part('year', date (t.transactiondate)) AS Year,
-    DATE_PART('month',date (t.transactiondate)) AS Month,
-    DATE_PART('dow',date (t.transactiondate)) AS DayWeek
-FROM transactions_2016 as t
+    t.parcelid
+    , t.logerror
+    , t.transactiondate
+    , DATE_PART('year', date (t.transactiondate)) AS year
+    , DATE_PART('month',date (t.transactiondate)) AS month
+    , DATE_PART('dow',date (t.transactiondate)) AS day_of_week
+    , DATE_TRUNC('month', date(transactiondate)) AS year_and_month
+FROM 
+	transactions t
+;
 
-/* extract year, month, date*/
-SELECT 
-    nt.date,nt.err,
-	DATE_PART('year',timestamp nt.date) AS Year,
-    DATE_PART('month',timestamp nt.date) AS Month,
-    DATE_PART('dow',timestamp nt.date) AS DayWeek
-FROM newtable as nt;
-        
-        
-SELECT 
-    nt.date,nt.err,
-	EXTRACT(YEAR from nt.date) AS Year,
-    EXTRACT(MONTH from nt.date) AS Month,
-    EXTRACT(DOW from nt.date) as date) AS DayWeek
-FROM newtable as nt;      
-        
+-- this table the logerror information by month
+DROP TABLE IF EXISTS tmp_aggregated_logerror_information;
+CREATE TABLE tmp_aggregated_logerror_information AS
+SELECT
+	year_and_month
+	, AVG(logerror) avg_logerror
+	, AVG(abs(logerror)) avg_abs_logerror
+	, STDDEV(logerror) std_dev_logerror
+	, STDDEV(abs(logerror)) std_dev_abs_logerror 
+FROM
+	tmp_additional_temporal_information
+GROUP BY
+	1
+ORDER BY
+	1 ASC
+;
 
 
-/* average log error */
+DROP TABLE IF EXISTS tmp_aggregated_logerror_infomation_and_trend;
+CREATE TABLE tmp_aggregated_logerror_infomation_and_trend AS
+SELECT
+	year_and_month
+	, avg_logerror
+	, avg_abs_logerror
+	
+	, AVG(avg_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING) avg_logerror_last_1_month
+	, AVG(avg_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) avg_logerror_last_2_month
+	, AVG(avg_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) avg_logerror_last_3_month
+	, AVG(avg_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) avg_logerror_last_6_month
+
+	, std_dev_logerror
+	, std_dev_abs_logerror
+	, AVG(std_dev_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING) avg_std_dev_logerror_last_1_month
+	, AVG(std_dev_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) avg_std_dev_logerror_last_2_month
+	, AVG(std_dev_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) avg_std_dev_logerror_last_3_month
+	, AVG(std_dev_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) avg_std_dev_logerror_last_6_month
+	, AVG(std_dev_abs_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING) avg_std_dev_abs_logerror_last_1_month
+	, AVG(std_dev_abs_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) avg_std_dev_abs_logerror_last_2_month
+	, AVG(std_dev_abs_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) avg_std_dev_abs_logerror_last_3_month
+	, AVG(std_dev_abs_logerror) OVER (ORDER BY year_and_month ASC ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) avg_std_dev_abs_logerror_last_6_month
+FROM
+	tmp_aggregated_logerror_information
+;
+
+
+-- this table generates additional features for transactions
+DROP TABLE IF EXISTS transactions_additional_features;
+CREATE TABLE transactions_additional_features as
 SELECT 
-   	   AVG(nt.err) OVER (PARTITION BY nt.DayWeek ORDER BY nt.ndate ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ) AS avg_logerr_dweek,
-       AVG(nt.err)
-            OVER(ORDER BY nt.month ROWS BETWEEN 0 PRECEDING AND CURRENT ROW) AS avg_logerr_1month,
-       stddev_samp(nt.err)
-            OVER(ORDER BY nt.month ROWS BETWEEN 0 PRECEDING AND CURRENT ROW) AS STD_logerr_1month,     
-       AVG(nt.err)
-            OVER(ORDER BY nt.month ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS avg_logerr_2month,
-       stddev_samp(nt.err)
-       OVER(ORDER BY nt.month ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS STD_logerr_2month,   
-       AVG(nt.err)
-            OVER(ORDER BY nt.month ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS avg_logerr_quarter,
-       stddev_samp(nt.err)
-       OVER(ORDER BY nt.month ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS STD_logerr_quarter, 
-        AVG(nt.err)
-            OVER(ORDER BY nt.month ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS avg_logerr_semiannual,
-       stddev_samp(nt.err)
-       OVER(ORDER BY nt.month ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS STD_logerr_semiannual
-FROM newtable nt
+	t.parcelid
+    , t.logerror
+    , t.transactiondate
+    , t.year
+    , t.month
+    , t.day_of_week
+    --, t.year_and_month
+    , f.*
+FROM 
+	tmp_additional_temporal_information t
+JOIN
+	tmp_aggregated_logerror_infomation_and_trend f
+ON
+	t.year_and_month = f.year_and_month		
+;
+
+
+
+COPY transactions_additional_features TO '~/Downloads/transactions_features' DELIMITER ',' CSV HEADER;
+
+
+
+
 
 
